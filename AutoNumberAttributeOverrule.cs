@@ -8,6 +8,8 @@ using System.Text;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.MacroRecorder;
+using System.Runtime.CompilerServices;
 
 namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
 {
@@ -95,18 +97,17 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       /// references.
       /// </summary>
 
-      static int GetSeedValue( ObjectId blockId, string tag )
+      static int GetSeedValue(ObjectId blockId, string tag )
       {
          int result = 0;
-         using( Transaction tr = blockId.Database.TransactionManager.StartTransaction() )
+         using(Transaction tr = blockId.Database.TransactionManager.StartTransaction())
          {
             // From all insertions of the given block, get the numerically-greatest
             // TextString value of the AttributeReference with the given tag, as an
             // integer:
 
-            BlockTableRecord btr = blockId.GetObject<BlockTableRecord>();
-            result = btr.GetAttributeReferences( tag ).Select( GetNumericValue ).Max();
-
+            BlockTableRecord btr = tr.GetObject<BlockTableRecord>(blockId);
+            result = btr.GetAttributeReferences(tr, tag).Select(GetNumericValue).Max();
             tr.Commit();
          }
          return result + 1;
@@ -121,7 +122,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
 
       public override void Close( DBObject obj )
       {
-         if( obj.Database == this.db && obj.IsNewObject && obj.IsWriteEnabled )
+         if(obj.Database == this.db && obj.IsNewObject && obj.IsWriteEnabled )
          {
             AttributeReference attref = obj as AttributeReference;
             if( attref != null && attref.Tag.ToUpper() == this.tag )
@@ -141,10 +142,10 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
    internal static class AcDbExtensionMethods
    {
 
-      public static T GetObject<T>( this ObjectId id, OpenMode mode = OpenMode.ForRead )
+      public static T GetObject<T>( this Transaction tr, ObjectId id, OpenMode mode = OpenMode.ForRead )
          where T : DBObject
       {
-         return (T) id.GetObject( mode, false, false );
+         return (T) tr.GetObject(id, mode, false, false);
       }
 
       /// <summary>
@@ -152,15 +153,15 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       /// every insertion of the given block.
       /// </summary>
 
-      public static IEnumerable<AttributeReference> GetAttributeReferences( this BlockTableRecord btr, string tag )
+      public static IEnumerable<AttributeReference> GetAttributeReferences( this BlockTableRecord btr, Transaction tr, string tag )
       {
          if( btr == null )
             throw new ArgumentNullException( "btr" );
-         Transaction tr = btr.Database.TransactionManager.TopTransaction;
+         tr = tr ?? btr.Database.TransactionManager.TopTransaction;
          if( tr == null )
             throw new InvalidOperationException( "No transaction" );
          string s = tag.ToUpper();
-         foreach( var blkref in btr.GetBlockReferences() )
+         foreach( var blkref in btr.GetBlockReferences(tr) )
          {
             var attref = blkref.GetAttributes( tr ).FirstOrDefault( a => a.Tag.ToUpper() == s );
             if( attref != null )
@@ -188,11 +189,11 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       /// including dynamic block references.
       /// </summary>
 
-      public static IEnumerable<BlockReference> GetBlockReferences( this BlockTableRecord btr, OpenMode mode = OpenMode.ForRead, bool directOnly = true )
+      public static IEnumerable<BlockReference> GetBlockReferences( this BlockTableRecord btr, Transaction tr, OpenMode mode = OpenMode.ForRead, bool directOnly = true )
       {
          if( btr == null )
             throw new ArgumentNullException( "btr" );
-         var tr = btr.Database.TransactionManager.TopTransaction;
+         tr = tr ?? btr.Database.TransactionManager.TopTransaction;
          if( tr == null )
             throw new InvalidOperationException( "No transaction" );
          ObjectIdCollection ids = btr.GetBlockReferenceIds( directOnly, true );
@@ -208,20 +209,19 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
             cnt = blockIds.Count;
             for( int i = 0; i < cnt; i++ )
             {
-               btr2 = (BlockTableRecord) tr.GetObject( blockIds[i], OpenMode.ForRead, false, false );
+               btr2 = tr.GetObject<BlockTableRecord>( blockIds[i], OpenMode.ForRead);
                ids = btr2.GetBlockReferenceIds( directOnly, true );
                int cnt2 = ids.Count;
                for( int j = 0; j < cnt2; j++ )
                {
-                  yield return (BlockReference) tr.GetObject( ids[j], mode, false, false );
+                  yield return tr.GetObject<BlockReference>( ids[j], mode);
                }
             }
          }
       }
    }
 
-   abstract class ObjectOverrule<T> : ObjectOverrule
-      where T : DBObject
+   abstract class ObjectOverrule<T> : ObjectOverrule where T : DBObject
    {
       bool enabled = false;
       static RXClass rxclass = RXClass.GetClass( typeof( T ) );
@@ -263,7 +263,6 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       }
    }
 
-
    public static class AutoNumCommands
    {
       [CommandMethod( "AUTONUM" )]
@@ -274,7 +273,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
             Document doc = Application.DocumentManager.MdiActiveDocument;
             if( overrule != null )
             {
-               PromptIntegerOptions peo = new PromptIntegerOptions( "\nNew seed value: " );
+               var peo = new PromptIntegerOptions( "\nNew seed value: " );
                peo.UseDefaultValue = true;
                peo.DefaultValue = overrule.Next;
                peo.AllowNegative = false;
@@ -310,14 +309,14 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
             ObjectId blockId = ObjectId.Null;
             string tag = string.Empty;
             string name = string.Empty;
-            using( Transaction trans = doc.TransactionManager.StartTransaction() )
+            using( Transaction tr = new OpenCloseTransaction() )
             {
-               var attref = pner.ObjectId.GetObject<AttributeReference>();
+               var attref = tr.GetObject<AttributeReference>(pner.ObjectId);
                tag = attref.Tag.ToUpper();
-               var blkref = attref.OwnerId.GetObject<BlockReference>();
+               var blkref = tr.GetObject<BlockReference>(attref.OwnerId);
                blockId = blkref.DynamicBlockTableRecord;
-               name = blockId.GetObject<BlockTableRecord>().Name;
-               trans.Commit();
+               name = tr.GetObject<BlockTableRecord>(blockId).Name;
+               tr.Commit();
             }
             doc.Editor.WriteMessage( "\nScanning existing attribute values..." );
             overrule = new AutoNumberAttributeOverrule( blockId, tag );
