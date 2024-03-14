@@ -16,8 +16,7 @@ With the code loaded and running, it should not be
 possible for a user to create multiple instances of 
 the block reference, having identical values in the 
 attribute that's managed by the Overrule, including 
-by way of operations like INSERT (from block or file), 
-DXFIN, etc.
+by way of operations like COPY, INSERT, DXFIN, etc.
 
 To use the sample, you need a block with at least one
 attribute. With at least one insertion of the block in
