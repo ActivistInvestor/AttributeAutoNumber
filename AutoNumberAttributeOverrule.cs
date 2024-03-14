@@ -51,6 +51,25 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
    /// minimize overhead, which may be the only thing that may
    /// make the use of an ObjectOverrule feasable, considering
    /// the high overhead of an unconstrained ObjectOverrule.
+   /// 
+   /// Known issues/caveats:
+   /// 
+   /// 1. This proof-of-concept does not address several issues
+   ///    that would be relevant in real applications, including
+   ///    UNDO (decrementing the seed value if creation of the
+   ///    object that caused it to increment were undone).
+   ///    
+   /// 2. Numbering scope/namespaces: 
+   /// 
+   ///    Realistic application of this concept would likely 
+   ///    require seperate 'namespaces' for auto-incrementing 
+   ///    values. For example, blocks in one document would be 
+   ///    automatically numbered separately from the same 
+   ///    block(s) in another document. The same could apply
+   ///    to owner-scoped and block-scoped namespaces, where
+   ///    there may be a seperate 'next available number' that
+   ///    is maintained for each owner (e.g. BlockTableRecord), 
+   ///    or for each Block.
    ///
    /// </summary>
 
@@ -136,7 +155,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
    }
 
    /// <summary>
-   /// Excerpted from AcDbLinq.cs
+   /// Excerpts from AcDbLinq.cs
    /// </summary>
 
    internal static class AcDbExtensionMethods
@@ -157,7 +176,6 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       {
          if( btr == null )
             throw new ArgumentNullException( "btr" );
-         tr = tr ?? btr.Database.TransactionManager.TopTransaction;
          if( tr == null )
             throw new InvalidOperationException( "No transaction" );
          string s = tag.ToUpper();
@@ -177,11 +195,10 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       {
          if( blkref == null )
             throw new ArgumentNullException( "blkref" );
-         tr = tr ?? blkref.Database.TransactionManager.TopTransaction;
          if( tr == null )
             throw new InvalidOperationException( "No transaction" );
          foreach( ObjectId id in blkref.AttributeCollection )
-            yield return (AttributeReference) tr.GetObject( id, mode, false, false );
+            yield return tr.GetObject<AttributeReference>( id, mode );
       }
 
       /// <summary>
@@ -193,14 +210,13 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       {
          if( btr == null )
             throw new ArgumentNullException( "btr" );
-         tr = tr ?? btr.Database.TransactionManager.TopTransaction;
          if( tr == null )
             throw new InvalidOperationException( "No transaction" );
          ObjectIdCollection ids = btr.GetBlockReferenceIds( directOnly, true );
          int cnt = ids.Count;
          for( int i = 0; i < cnt; i++ )
          {
-            yield return (BlockReference) tr.GetObject( ids[i], mode, false, false );
+            yield return tr.GetObject<BlockReference>(ids[i], mode);
          }
          if( btr.IsDynamicBlock )
          {
@@ -209,7 +225,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
             cnt = blockIds.Count;
             for( int i = 0; i < cnt; i++ )
             {
-               btr2 = tr.GetObject<BlockTableRecord>( blockIds[i], OpenMode.ForRead);
+               btr2 = tr.GetObject<BlockTableRecord>(blockIds[i]);
                ids = btr2.GetBlockReferenceIds( directOnly, true );
                int cnt2 = ids.Count;
                for( int j = 0; j < cnt2; j++ )
@@ -352,4 +368,5 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
    }
 
 
+   
 }
