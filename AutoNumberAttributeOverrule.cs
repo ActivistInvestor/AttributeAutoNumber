@@ -4,12 +4,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.ApplicationServices;
-using Autodesk.AutoCAD.MacroRecorder;
-using System.Runtime.CompilerServices;
 
 namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
 {
@@ -17,9 +14,9 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
    ///
    /// Disclaimer:
    ///
-   /// This code is intended for demonstration purposes only,
-   /// and as-provided, is not necessarily fit or suitable for
-   /// any specific purpose.
+   /// This code is intended to serve as a proof-of-concept,
+   /// for demonstration purposes, and as-provided, is not 
+   /// necessarily fit for any specific purpose.
    ///
    /// AutoNumberAttributeOverrule:
    ///
@@ -32,32 +29,52 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
    /// possible for a user to create multiple instances of
    /// the block reference, having identical values in the
    /// attribute that's managed by the Overrule, including
-   /// by way of operations like INSERT (from block or file),
-   /// DXFIN, etc.
+   /// by way of operations like INSERT, COPY, etc.
    ///
    /// To use the sample, you need a block with at least one
    /// attribute. With at least one insertion of the block in
    /// the current drawing, issue the AUTONUM command, and
    /// select the attribute whose value is to be managed.
+   /// 
+   /// After that, try using the INSERT command to insert one
+   /// or more insertions of the selected block/attribute, and
+   /// you should see the attribute in each newly-inserted
+   /// block reference assigned a value that is 1 greater  than
+   /// the value in the most-recently inserted block/attribute.
+   /// 
+   /// Next try using the COPY command, selecting one or more
+   /// insertions of the automumber-managed block/attiribute,
+   /// resulting in one or more copies of them, and you should 
+   /// see that in each newly-created copy of the selected 
+   /// block/attribute, the value of the attribute has been 
+   /// incremented to be unique across all insertion attributes.
    ///
    /// The demonstration uses block attributes mainly for the
    /// purpose of making the behavior easily observable, but
    /// the same concepts and approach used can be applied to
-   /// data stored in Xdata or Xrecords as well.
+   /// values stored in Xdata or Xrecords as well.
    ///
    /// When using this approach for ensuring unique values in
    /// xdata or in an extension dictionary, you would use an
-   /// Overrule with an XData filter or Dictionary filter, to
-   /// minimize overhead, which may be the only thing that may
-   /// make the use of an ObjectOverrule feasable, considering
-   /// the high overhead of an unconstrained ObjectOverrule.
+   /// Overrule with an XData filter or XDictionary filter, to
+   /// minimize overhead.
    /// 
    /// Known issues/caveats:
    /// 
    /// 1. This proof-of-concept does not address several issues
    ///    that would be relevant in real applications, including
-   ///    UNDO (decrementing the seed value if creation of the
-   ///    object that caused it to increment were undone).
+   ///    UNDO/REDO (decrementing/incrementing the seed value if 
+   ///    creation of the object that caused it to increment were 
+   ///    undone/redone).
+   ///    
+   ///    The UNDO/REDO problem can be solved by using application-
+   ///    defined system variables whose value is managed by the
+   ///    undo mechansim. If you UNDO changes to a database, any
+   ///    changes to the application-defined sysvar will be undone
+   ///    as well. So, the 'seed' value that is assigned to each
+   ///    instance of the numbered object can be persisted in an
+   ///    application-defined system variable, and its value will
+   ///    be managed by the undo mechanism.
    ///    
    /// 2. Numbering scope/namespaces: 
    /// 
@@ -83,7 +100,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       public AutoNumberAttributeOverrule( ObjectId blockId, string tag )
          : base( false )
       {
-         if( string.IsNullOrEmpty( tag ) )
+         if( string.IsNullOrWhiteSpace( tag ) )
             throw new ArgumentException( "tag" );
          if( blockId.IsNull || !blockId.IsValid )
             throw new ArgumentException( "blockId" );
@@ -119,20 +136,20 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       static int GetSeedValue(ObjectId blockId, string tag )
       {
          int result = 0;
-         using(Transaction tr = blockId.Database.TransactionManager.StartTransaction())
+         using(Transaction tr = new OpenCloseTransaction())
          {
             // From all insertions of the given block, get the numerically-greatest
             // TextString value of the AttributeReference with the given tag, as an
             // integer:
 
             BlockTableRecord btr = tr.GetObject<BlockTableRecord>(blockId);
-            result = btr.GetAttributeReferences(tr, tag).Select(GetNumericValue).Max();
+            result = btr.GetAttributeReferences( tr, tag ).Select( Parse ).Max();
             tr.Commit();
          }
          return result + 1;
       }
 
-      static int GetNumericValue( AttributeReference attref )
+      static int Parse( AttributeReference attref )
       {
          int num = 1;
          int.TryParse( attref.TextString, out num );
@@ -141,7 +158,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
 
       public override void Close( DBObject obj )
       {
-         if(obj.Database == this.db && obj.IsNewObject && obj.IsWriteEnabled )
+         if( obj.Database == this.db && obj.IsNewObject && obj.IsWriteEnabled )
          {
             AttributeReference attref = obj as AttributeReference;
             if( attref != null && attref.Tag.ToUpper() == this.tag )
@@ -161,6 +178,11 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
    internal static class AcDbExtensionMethods
    {
 
+      /// <summary>
+      /// Opens an object with a transaction, and casts it to the
+      /// generic argument.
+      /// </summary>
+
       public static T GetObject<T>( this Transaction tr, ObjectId id, OpenMode mode = OpenMode.ForRead )
          where T : DBObject
       {
@@ -168,8 +190,8 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
       }
 
       /// <summary>
-      /// Get all AttributeReferences with the given tag, from
-      /// every insertion of the given block.
+      /// Gets all AttributeReferences with the specified tag, 
+      /// from every insertion of the given block.
       /// </summary>
 
       public static IEnumerable<AttributeReference> GetAttributeReferences( this BlockTableRecord btr, Transaction tr, string tag )
@@ -203,7 +225,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
 
       /// <summary>
       /// Get all references to the given BlockTableRecord,
-      /// including dynamic block references.
+      /// including anonymous dynamic block references.
       /// </summary>
 
       public static IEnumerable<BlockReference> GetBlockReferences( this BlockTableRecord btr, Transaction tr, OpenMode mode = OpenMode.ForRead, bool directOnly = true )
@@ -235,48 +257,48 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
             }
          }
       }
+
+      public static bool IsA<T>(this ObjectId id, bool exact = false) where T: DBObject
+      {
+         return exact ? id.ObjectClass == RXClass<T>.Value 
+            : id.ObjectClass.IsDerivedFrom(RXClass<T>.Value);
+      }
    }
 
-   abstract class ObjectOverrule<T> : ObjectOverrule where T : DBObject
+   /// <summary>
+   /// A class that caches the result of RXObject.GetClass() (which must query
+   /// its Type argument for existence of a DisposableWrapperAttribute, making 
+   /// it terribly-ineffecient in a high-frequency usage scenario).
+   /// 
+   /// By using the managed type as the generic argument, a seperate generic type 
+   /// can be constructed for each managed type used with RXClass<T>, essentially
+   /// reducing the lookup of the RXClass to little more than accessing a field of 
+   /// a static type. You can equate it to a static field of a static type that
+   /// is initialized to the result of RXObject.GetClass(type), reqiring a distinct
+   /// field for each type argument.
+   ///
+   /// When using this class verses RXObject.GetClass(), the latter must be called
+   /// only once to initialize the static field, and from that point on, the field's
+   /// value is used. This class is only useful in cases where the managed wrapper 
+   /// type argument is a design-time constant, a fairly-common pattern:
+   /// 
+   ///    RXClass rxclass = RXObject.GetClass(typeof(ManagedWrapperType));
+   ///    
+   /// By replacing the above with:
+   /// 
+   ///    RXClass rxclass = RXClass<ManagedWrapperType>.Value;
+   ///    
+   /// The assignment to the variable is nothing more than referencing
+   /// the Value field of the RXClass<T> type for the given generic 
+   /// argument. That allows a reference to the Value field to replace 
+   /// the need for the variable as well.
+   ///    
+   /// </summary>
+   /// <typeparam name="T"></typeparam>
+
+   public static class RXClass<T> where T: RXObject
    {
-      bool enabled = false;
-      static RXClass rxclass = RXClass.GetClass( typeof( T ) );
-
-      public ObjectOverrule( bool enabled = true )
-      {
-         Enabled = enabled;
-      }
-
-      public virtual bool Enabled
-      {
-         get
-         {
-            return this.enabled;
-         }
-         set
-         {
-            if( this.enabled ^ value )
-            {
-               this.enabled = value;
-               if( value )
-                  Overrule.AddOverrule( rxclass, this, true );
-               else
-                  Overrule.RemoveOverrule( rxclass, this );
-               OnEnabledChanged( this.enabled );
-            }
-         }
-      }
-
-      protected virtual void OnEnabledChanged( bool enabled )
-      {
-      }
-
-      protected override void Dispose( bool disposing )
-      {
-         if( disposing && ! base.IsDisposed )
-            Enabled = false;
-         base.Dispose( disposing );
-      }
+      public static readonly RXClass Value = RXObject.GetClass(typeof(T));
    }
 
    public static class AutoNumCommands
@@ -317,7 +339,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
             var pner = doc.Editor.GetNestedEntity( pneo );
             if( pner.Status != PromptStatus.OK )
                return;
-            if( !pner.ObjectId.ObjectClass.IsDerivedFrom( RXClass.GetClass( typeof( AttributeReference ) ) ) )
+            if( !pner.ObjectId.IsA<AttributeReference>())
             {
                doc.Editor.WriteMessage( "\nInvalid selection, must select a block attribute" );
                return;
@@ -334,7 +356,7 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
                name = tr.GetObject<BlockTableRecord>(blockId).Name;
                tr.Commit();
             }
-            doc.Editor.WriteMessage( "\nScanning existing attribute values..." );
+            doc.Editor.WriteMessage( "\nScanning existing attributes..." );
             overrule = new AutoNumberAttributeOverrule( blockId, tag );
             doc.Editor.WriteMessage( "   done." );
             int next = overrule.Next;
@@ -366,7 +388,5 @@ namespace Autodesk.AutoCAD.DatabaseServices.MyExtensions
 
       static AutoNumberAttributeOverrule overrule = null;
    }
-
-
-   
+  
 }
